@@ -145,11 +145,19 @@ module Library
       </code></pre>
     }
     tag "library:pages" do |tag|
-      tag.locals.pages = _get_pages(tag)
+      # tag.locals.pages = _get_pages(tag)
       tag.expand
     end
     tag "library:pages:each" do |tag|
-      tag.render('page_list', tag.attr.dup, &tag.block)       # r:page_list is defined in taggable
+      displayed_children = tag.locals.pages = _get_pages(tag)
+      result = tag.render('page_list', tag.attr.dup, &tag.block)       # r:page_list is defined in taggable
+      
+      if tag.attr.symbolize_keys[:paginated] == 'true' && displayed_children.total_pages > 1
+        tag.locals.paginated_list = displayed_children
+        result << tag.render('pagination_with_tags', tag.attr.dup)
+      end
+      result
+      
     end
 
     desc %{
@@ -164,23 +172,23 @@ module Library
       tag.expand if _get_pages(tag).any?
     end
 
-    desc %{
-      Displays a list of the assets associated with the current tag set. If no tags are specified, this will show all assets.
-      You can use all the usual r:assets tags within the list.
+    # desc %{
+    #   Displays a list of the assets associated with the current tag set. If no tags are specified, this will show all assets.
+    #   You can use all the usual r:assets tags within the list.
       
-      By, order, limit and offset attributes are obeyed. The default is to sort by creation date, descending.
+    #   By, order, limit and offset attributes are obeyed. The default is to sort by creation date, descending.
       
-      To paginate the list, set paginated="true" and, optionally, per_page="xx".
+    #   To paginate the list, set paginated="true" and, optionally, per_page="xx".
       
-      *Usage:* 
-      <pre><code>
-        <r:library:assets:each><li><r:assets:thumbnail /></li></r:library:assets:each>
-      </code></pre>
-    }
-    tag "library:assets" do |tag|
-      tag.locals.assets = _get_assets(tag)
-      tag.expand
-    end
+    #   *Usage:* 
+    #   <pre><code>
+    #     <r:library:assets:each><li><r:assets:thumbnail /></li></r:library:assets:each>
+    #   </code></pre>
+    # }
+    # tag "library:assets" do |tag|
+    #   tag.locals.assets = _get_assets(tag)
+    #   tag.expand
+    # end
     tag "library:assets:each" do |tag|
       tag.render('asset_list', tag.attr.dup, &tag.block)       # r:page_list is defined in spanner's paperclipped
     end
@@ -229,8 +237,34 @@ module Library
         tag.locals.assets = _get_assets(tag).send(these.intern)
         tag.expand if tag.locals.assets.any?
       end
+      
+      desc %{
+        The pagination tag is not usually called directly. Supply paginated="true" when you display a list and it will
+        be automatically display only the current page of results, with pagination controls at the bottom.
+
+        *Usage:*
+
+        <pre><code><r:children:each paginated="true" per_page="50" container="false" previous_label="foo" next_label="bar">
+          <r:child>...</r:child>
+        </r:children:each>
+        </code></pre>
+      }
+      tag 'pagination_with_tags' do |tag|
+        if tag.locals.paginated_list
+          will_paginate(tag.locals.paginated_list, will_paginate_options_with_tags(tag))
+        end
+      end
 
       private
+      
+        def will_paginate_options_with_tags(tag)
+          attr = tag.attr.symbolize_keys
+          if attr[:paginated] == 'true'
+            attr.slice(:class, :previous_label, :next_label, :inner_window, :outer_window, :separator, :per_page).merge({:renderer => Radiant::Pagination::LinkRenderer.new(tag.globals.page.url_with_tags)})
+          else
+            {}
+          end
+        end
 
         def _get_requested_tags(tag)
           tag.locals.page.requested_tags
@@ -256,11 +290,15 @@ module Library
         }
       end
       
-      def _get_pages(tag)
+      def _get_pages(tag)        
         options = children_find_options(tag)
+        paging = pagination_find_options(tag)
+        
         requested = _get_requested_tags(tag)
+                
         pages = Page.scoped(options)
         pages = pages.tagged_with(requested) if requested.any?
+        pages = pages.paginate(options.merge(paging)) if paging
         pages
       end
 
@@ -305,11 +343,14 @@ module Library
           raise TagError.new(%{`order' attribute of `each' tag must be set to either "asc" or "desc"})
         end
         options[:order] = order_string
+        
+        # TODO: refactor to expansion from r:find
+        if child_page = attr[:child_page]
+          options[:conditions] = { :parent_id => Page.find_by_slug(child_page).id }
+        end
         options
       end
 
     end
 
 end
-
-
